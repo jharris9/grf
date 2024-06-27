@@ -1,0 +1,117 @@
+
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+######## ANALYZE GRF DATA ##########
+analyze_grf=function(samples, data_path, figure_path, data_set, projection){
+  figure_path=paste0(figure_path,"/",data_set,"/")
+  obj = load_grf_data(samples,data_path, data_set)
+  obj = calculate_cell_qc(obj,dataset=data_set,resolution=2)
+  #plot_cluster_qc(obj.margeta,figure_path,data_set)
+  obj = apply_qc_label(obj,min_genes=400,mit_cutoff=25,max_count=40000)
+  obj = JoinLayers(obj)
+  obj = qc_subset(obj, figure_path)
+  saveRDS(
+    object = obj,
+    file = paste0(data_set,".analyzed.Rds"),
+    destdir = data_path)
+  return(obj)
+  projection_str = paste0(data_set,"_into_",projection)
+  obj = identify_cell_types(obj,figure_path,projection_str,projection)
+  calculate_celltype_prevalence(obj,paste0(figure_path,projection_str,".csv"))
+}
+
+calculate_celltype_prevalence=function(obj,csv_path){
+  df = obj@meta.data %>% group_by(orig.ident)%>%
+    count(predicted.celltype.l1)
+  df = t(dcast(df,orig.ident~predicted.celltype.l1))
+  write.csv(df,file=csv_path)
+}
+
+load_grf_data = function(samples,base_path,study){
+  data.list <- c()
+  sample_id <- c()
+  for (i in 1:length(samples)){
+    sample_path <- paste0(base_path,samples[i],"/filtered_feature_bc_matrix.h5")
+    print(sample_path)
+    mat <- Read10X_h5(sample_path,T,T)
+    colnames(mat) = paste0(samples[i],"_",colnames(mat))
+    path <- paste0(gsub(".h5", "", sample_path), "_BP")
+    write_matrix_dir(
+      mat = mat,
+      dir = path,
+      overwrite = TRUE
+    )
+    mat <- open_matrix_dir(dir=path)
+    data.list[[i]] <- mat
+    sample_id = c(sample_id,rep(samples[i],length(colnames(mat))))
+  }
+  names(data.list) <- samples
+  merged.object <- CreateSeuratObject(counts = data.list)
+  merged.object$orig.ident<- sample_id
+  merged.object$Study = study
+  return(merged.object)
+}
+```
+
+```{r}
+source("/Users/james/Nextcloud/Lab/Margeta_lab/analyses/utils.R")
+suppressPackageStartupMessages({
+  library(RcppML)
+  library(tidyverse)
+  library(cowplot) 
+})
+base_path="/home/rstudio"
+data_path=paste0(base_path,"raw_data/margeta/")
+figure_path=paste0(base_path,"output/figures/")
+``` 
+
+```{r}
+samples.retina=c("AMf10","AMf11","AMf12")
+analyze_grf(samples.retina, data_path, figure_path, "231104_margeta_retina", "retina")
+obj.margeta.retina = analyze_grf(samples.retina, data_path, figure_path, "231104_margeta_retina", "inbal")
+obj.inbal = readRDS(paste0(base_path,"inbal/data/obj.inbal.subset.qced.Rds"))
+obj.margeta.retina = readRDS(paste0(data_path,"231104_margeta_retina.analyzed.Rds"))
+projection_str = "231104_margeta_retina_into_inbal"
+obj.margeta.retina = identify_cell_types(obj.margeta.retina,figure_path,projection_str,"inbal")
+calculate_celltype_prevalence(obj.margeta.retina,paste0(figure_path,projection_str,".csv"))
+
+samples.on=c("AMf8","AMf9")
+analyze_grf(samples.on, data_path, figure_path, "231104_margeta_on", "brain")
+```
+
+```{r}
+#pl.cluster_qc = VlnPlot(obj.margeta, group.by = "seurat_clusters", features = c("nFeature_RNA", "nCount_RNA",
+#                                                                                  "percent.mt"), ncol = 1) 
+#ggsave(filename="test.jpg",path="~/Desktop/",plot=pl.cluster_qc,device="jpeg",dpi="retina")
+test= readRDS(paste0(data_path,"obj.margeta.qced.Rds"))
+test[["RNA"]] <- split(test[["RNA"]], f = test$orig.ident)
+#obj.margeta <- readRDS(paste0(data_path,"obj.margeta.Rds"))
+#file_name = "231104_margeta_projected_into_retina_"
+#obj.margeta = project_into_reference(obj.mac,
+#                               obj.margeta,
+#                               file_name,
+#                               figure_path,
+#                               "cell_type")
+#sample_types = gsub("AMf8","other",obj.margeta$orig.ident)
+#sample_types = gsub("AMf9","other",sample_types)
+sample_types = gsub("AMf10","Muller",sample_types)
+sample_types = gsub("AMf11","Muller",sample_types)
+sample_types = gsub("AMf12","other",sample_types)
+obj.margeta$sample_type=sample_types
+plot_cluster(obj.margeta, figure_path, "231104_margeta_", groups=c("predicted.celltype.l1","orig.ident","sample_type"), "umap.unintegrated")
+
+mat <- Read10X_h5(paste0(data_path,),T,T)
+
+#Plot percent mitochondria by cluster
+```
+
+```{r}
+features = c("predicted.celltype.l1")
+p1= DimPlot(obj.margeta, reduction = "ref.umap", group.by = features, label = TRUE, label.size = 8,repel=T) + NoLegend()
+mapply(ggsave, file=paste0(features,".jpg"),path=figure_path,
+         device="jpeg",dpi="retina", units="in",height=20,width=30, plot=p1)
+DimPlot(obj.margeta, reduction  = "ref.umap", group.by = "orig.ident", label = FALSE)
+
+```
